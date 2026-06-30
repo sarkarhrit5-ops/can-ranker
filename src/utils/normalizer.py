@@ -1,3 +1,80 @@
+"""Normalization helpers used across parsing, features, and matching."""
+
+from __future__ import annotations
+
+import logging
+import re
+import unicodedata
+from typing import Final
+
+
+logger = logging.getLogger(__name__)
+
+SKILL_ALIASES: Final[dict[str, str]] = {
+    "airflow": "apache airflow",
+    "apache spark": "spark",
+    "js": "javascript",
+    "ml": "machine learning",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "postgres": "postgresql",
+    "py": "python",
+    "pyspark": "spark",
+    "sklearn": "scikit-learn",
+    "ts": "typescript",
+}
+
+DEGREE_ALIASES: Final[dict[str, str]] = {
+    "ba": "bachelor of arts",
+    "b.a.": "bachelor of arts",
+    "be": "bachelor of engineering",
+    "b.e.": "bachelor of engineering",
+    "bsc": "bachelor of science",
+    "b.sc": "bachelor of science",
+    "b.sc.": "bachelor of science",
+    "ma": "master of arts",
+    "m.a.": "master of arts",
+    "mca": "master of computer applications",
+    "msc": "master of science",
+    "m.sc": "master of science",
+    "m.sc.": "master of science",
+}
+
+COMPANY_SUFFIX_ALIASES: Final[dict[str, str]] = {
+    "corp": "",
+    "corporation": "",
+    "inc": "",
+    "inc.": "",
+    "limited": "",
+    "llc": "",
+    "ltd": "",
+    "ltd.": "",
+    "pvt": "",
+    "pvt. ltd": "",
+    "private limited": "",
+}
+
+
+def normalize_text(value: str) -> str:
+    """Normalize user-provided text into a comparable lowercase form.
+
+    Args:
+        value: Text to normalize.
+
+    Returns:
+        Lowercase text with normalized whitespace and punctuation.
+
+    Raises:
+        TypeError: If ``value`` is not a string.
+    """
+    _ensure_string(value, parameter_name="value")
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip()
+    normalized = re.sub(r"[_/]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = normalized.strip(" \t\r\n.,;:")
+    return normalized
+
+
 def normalize_skill(skill: str) -> str:
     """Normalize a skill name and resolve known aliases.
 
@@ -19,10 +96,6 @@ def normalize_skill(skill: str) -> str:
 
 def normalize_skill_list(skills: list[str]) -> list[str]:
     """Normalize and deduplicate skill names while preserving order.
-
-    The first occurrence of each canonical skill is retained.  Comparisons are
-    made after normalization, so aliases of an earlier skill are removed as
-    duplicates.
 
     Args:
         skills: Skill names to normalize.
@@ -71,9 +144,6 @@ def normalize_degree(degree: str) -> str:
 
 def normalize_company(company: str) -> str:
     """Normalize a company name and remove known legal suffixes.
-
-    Suffix matching is case-insensitive because text is normalized first.
-    Separating punctuation left before a removed suffix is also discarded.
 
     Args:
         company: Company name to normalize.

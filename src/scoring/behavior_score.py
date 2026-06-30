@@ -7,7 +7,7 @@ import math
 from collections.abc import Sized
 from typing import Any
 
-from models.match_result import MatchResult
+from src.models.match_result import MatchResult
 
 
 logger = logging.getLogger(__name__)

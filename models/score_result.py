@@ -1,26 +1,6 @@
-"""Domain model for externally produced candidate score results."""
+"""Compatibility wrapper for the score-result model.
 
-from dataclasses import dataclass
+The canonical implementation lives under ``src.models``.
+"""
 
-
-@dataclass(slots=True)
-class ScoreResult:
-    """Store a completed candidate scoring and ranking result.
-
-    This passive model does not calculate scores, rankings, recommendations, or
-    explanations.
-
-    Attributes:
-        candidate_id: Identifier of the scored candidate.
-        total_score: Aggregate score produced by an external scoring service.
-        ranking: Candidate's resulting rank.
-        recommendation: Human-readable recommendation category.
-        reasoning: Human-readable explanation accompanying the result.
-    """
-
-    candidate_id: str
-    total_score: float
-    ranking: int
-    recommendation: str
-    reasoning: str
-
+from src.models.score_result import ScoreResult  # noqa: F401

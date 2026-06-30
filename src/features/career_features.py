@@ -1,3 +1,171 @@
+"""Extract career-history features from candidate records."""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from datetime import date, datetime
+
+from src.models.candidate_features import CareerFeatures
+from src.utils.normalizer import normalize_company
+
+
+logger = logging.getLogger(__name__)
+
+_PRESENT_MARKERS = {"present", "current", "now", "ongoing"}
+_SENIORITY_LEVELS = [
+    "unknown",
+    "junior",
+    "mid",
+    "senior",
+    "lead",
+    "manager",
+    "director",
+    "executive",
+]
+_SENIORITY_KEYWORDS = {
+    "executive": {"chief", "cto", "ceo", "cxo", "vp", "vice president"},
+    "director": {"director", "head"},
+    "manager": {"manager", "management"},
+    "lead": {"lead", "principal", "architect", "staff"},
+    "senior": {"senior", "sr"},
+    "junior": {"junior", "jr", "intern", "trainee", "associate"},
+}
+
+
+@dataclass(slots=True)
+class _CareerEntry:
+    """Normalized internal representation of one career-history entry."""
+
+    company: str | None
+    title: str | None
+    start_date: date | None
+    end_date: date | None
+    duration_months: int
+    is_current: bool
+    explicit_promotions: int
+    sequence: int
+
+
+def extract_career_features(candidate: dict) -> CareerFeatures:
+    """Extract structured career features from a candidate.
+
+    Args:
+        candidate: Candidate record containing ``career_history`` entries.
+
+    Returns:
+        Career features derived from valid career-history entries.
+    """
+    if not isinstance(candidate, dict):
+        logger.warning(
+            "Cannot extract career features: expected a dictionary, received %s",
+            type(candidate).__name__,
+        )
+        return _empty_career_features()
+
+    raw_history = candidate.get("career_history") or candidate.get("experience") or []
+    if not isinstance(raw_history, list):
+        logger.warning(
+            "Cannot extract career features for candidate %r: history must be a "
+            "list",
+            candidate.get("candidate_id", "<unknown>"),
+        )
+        return _empty_career_features()
+
+    entries = [
+        entry
+        for index, raw_entry in enumerate(raw_history)
+        if (entry := _parse_career_entry(raw_entry, index)) is not None
+    ]
+    if not entries:
+        return _empty_career_features()
+
+    durations = [entry.duration_months for entry in entries]
+    companies = {entry.company for entry in entries if entry.company}
+    promotion_count = max(
+        _get_explicit_promotion_count(candidate, entries),
+        _infer_promotion_count(entries),
+    )
+
+    features = CareerFeatures(
+        total_years_experience=round(sum(durations) / 12, 2),
+        number_of_companies=len(companies),
+        average_tenure_months=round(sum(durations) / len(durations), 2),
+        longest_tenure_months=max(durations),
+        shortest_tenure_months=min(durations),
+        leadership_experience=any(
+            entry.is_current and _is_leadership_title(entry.title)
+            for entry in entries
+        )
+        or any(_is_leadership_title(entry.title) for entry in entries),
+        promotion_count=promotion_count,
+        seniority_level=_get_highest_seniority(entries),
+        career_growth_score=_calculate_career_growth_score(
+            entries,
+            promotion_count,
+        ),
+    )
+    logger.info(
+        "Extracted career features for candidate %r from %d role(s)",
+        candidate.get("candidate_id", "<unknown>"),
+        len(entries),
+    )
+    return features
+
+
+def _parse_career_entry(raw_entry: object, sequence: int) -> _CareerEntry | None:
+    """Parse one raw career-history entry.
+
+    Args:
+        raw_entry: Raw career entry.
+        sequence: Source order for stable sorting.
+
+    Returns:
+        Parsed career entry, or ``None`` when the entry is unusable.
+    """
+    if not isinstance(raw_entry, dict):
+        logger.warning("Ignored malformed career-history entry")
+        return None
+
+    start_date = _parse_date(raw_entry.get("start_date"))
+    end_date = _parse_date(
+        raw_entry.get("end_date"),
+        use_today=bool(raw_entry.get("is_current")),
+    )
+    duration_months = _extract_nonnegative_int(raw_entry.get("duration_months"))
+    if duration_months == 0 and start_date and end_date:
+        duration_months = _months_between(start_date, end_date)
+
+    if duration_months == 0:
+        logger.warning("Ignored career-history entry with no usable duration")
+        return None
+
+    company = _normalize_optional_company(raw_entry.get("company"))
+    title = _normalize_optional_text(raw_entry.get("title"))
+    return _CareerEntry(
+        company=company,
+        title=title,
+        start_date=start_date,
+        end_date=end_date,
+        duration_months=duration_months,
+        is_current=bool(raw_entry.get("is_current")),
+        explicit_promotions=_extract_nonnegative_int(
+            raw_entry.get("promotion_count")
+        ),
+        sequence=sequence,
+    )
+
+
+def _parse_date(value: object, *, use_today: bool = False) -> date | None:
+    """Parse a date-like value into a date.
+
+    Args:
+        value: Raw date value.
+        use_today: Whether ``None`` should be treated as today.
+
+    Returns:
+        Parsed date, or ``None`` when unavailable or invalid.
     """
     if value is None:
         return date.today() if use_today else None
@@ -45,6 +213,16 @@ def _normalize_optional_text(value: object) -> str | None:
         return None
     normalized_value = " ".join(value.casefold().split())
     return normalized_value or None
+
+
+def _normalize_optional_company(value: object) -> str | None:
+    """Return a normalized company name or ``None``."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return normalize_company(value)
+    except TypeError:
+        return None
 
 
 def _extract_nonnegative_number(value: object) -> float | None:
@@ -150,12 +328,7 @@ def _calculate_career_growth_score(
     entries: list[_CareerEntry],
     promotion_count: int,
 ) -> float:
-    """Calculate a bounded, descriptive career-progression metric.
-
-    Half of the metric reflects seniority gained from the earliest observed
-    role to the highest role, and half reflects up to three promotions.  This
-    is a trajectory summary, not a suitability or matching score.
-    """
+    """Calculate a bounded, descriptive career-progression metric."""
     titled_entries = [entry for entry in entries if entry.title]
     if not titled_entries:
         return 0.0
