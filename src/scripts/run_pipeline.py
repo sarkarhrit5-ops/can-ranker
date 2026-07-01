@@ -121,25 +121,34 @@ def process_candidate(
     candidate: dict[str, Any],
     job_description: dict[str, Any],
 ) -> ScoreResult:
-    """Run one candidate through the existing ranking pipeline.
+    """Run one candidate through the ranking pipeline."""
 
-    Args:
-        candidate: Validated candidate record.
-        job_description: Parsed job description.
-
-    Returns:
-        Score result populated with generated reasoning.
-    """
     candidate_id = candidate["candidate_id"]
-    candidate_features = extract_candidate_features(candidate)
-    match_result = semantic_match(candidate_features, job_description)
-    score_result = calculate_score(match_result)
-    score_result.reasoning = generate_reason(match_result, score_result)
 
+    # Feature extraction
+    candidate_features = extract_candidate_features(candidate)
+
+    # Semantic matching
+    match_result = semantic_match(candidate_features, job_description)
+
+    # Scoring
+    score_result = calculate_score(match_result)
+
+    # NEW: Generate reasoning using the original candidate profile
+
+    print(inspect.signature(generate_reason))
+    score_result.reasoning = generate_reason(
+        candidate,
+        match_result,
+        score_result,
+    )
+
+    # Fraud detection
     fraud_result = analyze_candidate_fraud(candidate)
     if fraud_result.get("fraud_detected"):
         logger.warning("Fraud detected for candidate %s", candidate_id)
 
+    # Consistency checks
     consistency_result = analyze_candidate_consistency(candidate)
     if not consistency_result.get("overall_consistent", True):
         logger.warning("Consistency failed for candidate %s", candidate_id)
